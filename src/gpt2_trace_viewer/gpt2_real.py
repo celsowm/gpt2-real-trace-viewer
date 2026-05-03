@@ -181,9 +181,10 @@ if __name__ == "__main__":
     model = GPT2LMHeadModel()
     model.eval()
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    input_ids = torch.tensor([[28228, 262, 1368, 373, 1026, 4953]])
+    prompt = "We the people of"
+    input_ids = tokenizer.encode(prompt, return_tensors="pt")
     with torch.no_grad():
         logits = model(input_ids)
         next_token = logits[0, -1].argmax().item()
-    print(f"Input: We the people of")
+    print(f"Input: {prompt}")
     print(f"Next token: {next_token} = '{tokenizer.decode([next_token])}'")
