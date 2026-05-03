@@ -102,7 +102,7 @@ def _build_rich_html(highlight_line: int = -1) -> str:
         ".code-line { line-height: 1.5; padding: 1px 0; white-space: pre; display: block; }"
         ".hl { background-color: #264F78; border-left: 4px solid #00FFFF; }"
         ".hl-num { color: #88FFFF; font-weight: bold; }"
-        ".line-num { color: #666; text-align: right; display: inline-block; width: 3em; padding-right: 1.5em; user-select: none; }"
+        ".line-num { color: #666; text-align: right; display: inline-block; min-width: 2.5em; margin-right: 1em; user-select: none; }"
         ".code-content { display: inline; }"
         "</style>"
     )
