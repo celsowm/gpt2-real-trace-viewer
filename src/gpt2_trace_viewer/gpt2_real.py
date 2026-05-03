@@ -1,14 +1,16 @@
 import torch
 import torch.nn.functional as F
 import os
+from transformers import GPT2Config
 
-VOCAB_SIZE = 50257
-N_LAYERS = 12
-N_HEAD = 12
-N_EMBD = 768
-HEAD_DIM = 64
-MAX_POS = 1024
-INTERMEDIATE_SIZE = 3072
+CONFIG = GPT2Config()
+VOCAB_SIZE = CONFIG.vocab_size
+N_LAYERS = CONFIG.n_layer
+N_HEAD = CONFIG.n_head
+N_EMBD = CONFIG.n_embd
+HEAD_DIM = N_EMBD // N_HEAD
+MAX_POS = CONFIG.max_position_embeddings
+INTERMEDIATE_SIZE = CONFIG.n_inner if CONFIG.n_inner else 4 * N_EMBD
 
 WEIGHTS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "gpt2_weights.pt")
 STATE_DICT = torch.load(WEIGHTS_PATH)
