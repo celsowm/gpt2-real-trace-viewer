@@ -46,7 +46,12 @@ def _highlight_line(line: str) -> str:
     cached = _HIGHLIGHT_CACHE.get(line)
     if cached is not None:
         return cached
-    escaped = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    leading_spaces = len(line) - len(line.lstrip())
+    leading = "&nbsp;" * leading_spaces if leading_spaces > 0 else ""
+    content = line.lstrip()
+    
+    escaped = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     parts: list[str] = []
     i = 0
     while i < len(escaped):
@@ -86,7 +91,7 @@ def _highlight_line(line: str) -> str:
             continue
         parts.append(escaped[i])
         i += 1
-    result = "".join(parts)
+    result = leading + "".join(parts)
     _HIGHLIGHT_CACHE[line] = result
     return result
 
@@ -94,10 +99,11 @@ def _highlight_line(line: str) -> str:
 def _build_rich_html(highlight_line: int = -1) -> str:
     style = (
         "<style>"
-        ".code-line { line-height: 1.5; padding: 1px 0; }"
+        ".code-line { line-height: 1.5; padding: 1px 0; white-space: pre; display: block; }"
         ".hl { background-color: #264F78; border-left: 4px solid #00FFFF; }"
         ".hl-num { color: #88FFFF; font-weight: bold; }"
         ".line-num { color: #666; text-align: right; display: inline-block; width: 3em; padding-right: 1.2em; user-select: none; }"
+        ".code-content { display: inline; }"
         "</style>"
     )
     parts: list[str] = []
@@ -110,7 +116,7 @@ def _build_rich_html(highlight_line: int = -1) -> str:
         parts.append(
             f'<div class="{hl_cls}"{tip_attr}>'
             f'<span class="{num_cls}">{idx + 1}</span>'
-            f'{highlighted}'
+            f'<span class="code-content">{highlighted}</span>'
             f'</div>'
         )
     return f"<!DOCTYPE HTML><html><body style='background:#0B0B0B; font-family: Consolas, monospace; font-size: 13px; margin: 8px;'>{style}{''.join(parts)}</body></html>"
