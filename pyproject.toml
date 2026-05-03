@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpt2-real-trace-viewer"
+version = "0.1.0"
+description = "PyQt6 GPT-2 real forward-pass tracer and graph viewer"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt6>=6.6",
+    "transformers>=4.40",
+    "torch>=2.2",
+]
+
+[project.scripts]
+gpt2-trace-viewer = "gpt2_trace_viewer.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
