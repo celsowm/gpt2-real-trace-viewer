@@ -177,10 +177,13 @@ class GPT2LMHeadModel(torch.nn.Module):
 
 
 if __name__ == "__main__":
+    from transformers import GPT2Tokenizer
     model = GPT2LMHeadModel()
     model.eval()
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     input_ids = torch.tensor([[28228, 262, 1368, 373, 1026, 4953]])
     with torch.no_grad():
         logits = model(input_ids)
         next_token = logits[0, -1].argmax().item()
-    print(f"Next token: {next_token}")
+    print(f"Input: We the people of")
+    print(f"Next token: {next_token} = '{tokenizer.decode([next_token])}'")
