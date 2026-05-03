@@ -16,23 +16,27 @@ WEIGHTS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "gpt2_weights
 STATE_DICT = torch.load(WEIGHTS_PATH)
 
 
-def _load_layer_weights(layer_idx):
+def _load_layer_weights(layer_idx, config):
     prefix = f"transformer.h.{layer_idx}."
     layer_state = {k.replace(prefix, ""): v for k, v in STATE_DICT.items() if k.startswith(prefix)}
-    return {
-        "attn.c_attn.weight": layer_state["attn.c_attn.weight"].T,
-        "attn.c_attn.bias": layer_state["attn.c_attn.bias"],
-        "attn.c_proj.weight": layer_state["attn.c_proj.weight"].T,
-        "attn.c_proj.bias": layer_state["attn.c_proj.bias"],
-        "mlp.c_fc.weight": layer_state["mlp.c_fc.weight"].T,
-        "mlp.c_fc.bias": layer_state["mlp.c_fc.bias"],
-        "mlp.c_proj.weight": layer_state["mlp.c_proj.weight"].T,
-        "mlp.c_proj.bias": layer_state["mlp.c_proj.bias"],
-        "ln_1.weight": layer_state["ln_1.weight"],
-        "ln_1.bias": layer_state["ln_1.bias"],
-        "ln_2.weight": layer_state["ln_2.weight"],
-        "ln_2.bias": layer_state["ln_2.bias"],
+    
+    embed_dim = config.get("n_embd", CONFIG.n_embd)
+    intermediate = config.get("n_inner", CONFIG.n_inner if CONFIG.n_inner else 4 * embed_dim)
+    
+    expected_shapes = {
+        "attn.c_attn.weight": (embed_dim * 3, embed_dim),
+        "attn.c_proj.weight": (embed_dim, embed_dim),
+        "mlp.c_fc.weight": (intermediate, embed_dim),
+        "mlp.c_proj.weight": (embed_dim, intermediate),
     }
+    
+    weights = {}
+    for key, value in layer_state.items():
+        if key in expected_shapes:
+            if value.shape != expected_shapes[key]:
+                value = value.T
+        weights[key] = value
+    return weights
 
 
 class GPT2Attention(torch.nn.Module):
@@ -49,7 +53,7 @@ class GPT2Attention(torch.nn.Module):
         self.resid_dropout = torch.nn.Dropout(0.1)
 
         if layer_idx is not None:
-            w = _load_layer_weights(layer_idx)
+            w = _load_layer_weights(layer_idx, config)
             with torch.no_grad():
                 self.c_attn.weight.copy_(w["attn.c_attn.weight"])
                 self.c_attn.bias.copy_(w["attn.c_attn.bias"])
@@ -87,7 +91,7 @@ class GPT2MLP(torch.nn.Module):
         self.dropout = torch.nn.Dropout(0.1)
 
         if layer_idx is not None:
-            w = _load_layer_weights(layer_idx)
+            w = _load_layer_weights(layer_idx, config)
             with torch.no_grad():
                 self.c_fc.weight.copy_(w["mlp.c_fc.weight"])
                 self.c_fc.bias.copy_(w["mlp.c_fc.bias"])
@@ -112,7 +116,7 @@ class GPT2Block(torch.nn.Module):
         self.mlp = GPT2MLP(config, layer_idx=layer_idx)
 
         if layer_idx is not None:
-            w = _load_layer_weights(layer_idx)
+            w = _load_layer_weights(layer_idx, config)
             with torch.no_grad():
                 self.ln_1.weight.copy_(w["ln_1.weight"])
                 self.ln_1.bias.copy_(w["ln_1.bias"])
