@@ -17,19 +17,21 @@ STATE_DICT = torch.load(WEIGHTS_PATH)
 
 
 def _load_layer_weights(layer_idx):
+    prefix = f"transformer.h.{layer_idx}."
+    layer_state = {k.replace(prefix, ""): v for k, v in STATE_DICT.items() if k.startswith(prefix)}
     return {
-        "attn.c_attn.weight": STATE_DICT[f"transformer.h.{layer_idx}.attn.c_attn.weight"].T,
-        "attn.c_attn.bias": STATE_DICT[f"transformer.h.{layer_idx}.attn.c_attn.bias"],
-        "attn.c_proj.weight": STATE_DICT[f"transformer.h.{layer_idx}.attn.c_proj.weight"].T,
-        "attn.c_proj.bias": STATE_DICT[f"transformer.h.{layer_idx}.attn.c_proj.bias"],
-        "mlp.c_fc.weight": STATE_DICT[f"transformer.h.{layer_idx}.mlp.c_fc.weight"].T,
-        "mlp.c_fc.bias": STATE_DICT[f"transformer.h.{layer_idx}.mlp.c_fc.bias"],
-        "mlp.c_proj.weight": STATE_DICT[f"transformer.h.{layer_idx}.mlp.c_proj.weight"].T,
-        "mlp.c_proj.bias": STATE_DICT[f"transformer.h.{layer_idx}.mlp.c_proj.bias"],
-        "ln_1.weight": STATE_DICT[f"transformer.h.{layer_idx}.ln_1.weight"],
-        "ln_1.bias": STATE_DICT[f"transformer.h.{layer_idx}.ln_1.bias"],
-        "ln_2.weight": STATE_DICT[f"transformer.h.{layer_idx}.ln_2.weight"],
-        "ln_2.bias": STATE_DICT[f"transformer.h.{layer_idx}.ln_2.bias"],
+        "attn.c_attn.weight": layer_state["attn.c_attn.weight"].T,
+        "attn.c_attn.bias": layer_state["attn.c_attn.bias"],
+        "attn.c_proj.weight": layer_state["attn.c_proj.weight"].T,
+        "attn.c_proj.bias": layer_state["attn.c_proj.bias"],
+        "mlp.c_fc.weight": layer_state["mlp.c_fc.weight"].T,
+        "mlp.c_fc.bias": layer_state["mlp.c_fc.bias"],
+        "mlp.c_proj.weight": layer_state["mlp.c_proj.weight"].T,
+        "mlp.c_proj.bias": layer_state["mlp.c_proj.bias"],
+        "ln_1.weight": layer_state["ln_1.weight"],
+        "ln_1.bias": layer_state["ln_1.bias"],
+        "ln_2.weight": layer_state["ln_2.weight"],
+        "ln_2.bias": layer_state["ln_2.bias"],
     }
 
 
