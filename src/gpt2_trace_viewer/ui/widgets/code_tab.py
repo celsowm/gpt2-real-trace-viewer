@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont, QTextCursor
+from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -14,205 +14,32 @@ from PyQt6.QtWidgets import (
 
 from gpt2_trace_viewer.application.trace_result import TraceResult
 from gpt2_trace_viewer.ui.step_reveal import StepRevealController
+from gpt2_trace_viewer.ui.widgets.code_source_strings import CODE_SOURCE
 
-CODE_SOURCE = r'''import torch
-import torch.nn.functional as F
-
-# === TOKENIZACAO ===
-input_ids = tokenizer.encode(prompt, return_tensors="pt")
-tokens = [tokenizer.decode([tid]) for tid in input_ids[0]]
-seq_len = input_ids.shape[1]
-position_ids = torch.arange(0, seq_len).unsqueeze(0)
-
-# === EMBEDDING ===
-token_embeddings = model.transformer.wte(input_ids)
-position_embeddings = model.transformer.wpe(position_ids)
-hidden_states = token_embeddings + position_embeddings
-
-# === CONFIG ===
-embed_dim = model.config.n_embd
-num_heads = model.config.n_head
-head_dim = embed_dim // num_heads
-causal_mask = torch.tril(torch.ones(seq_len, seq_len)).view(1, 1, seq_len, seq_len)
-
-# === BLOCO TRANSFORMER (x12) ===
-for block_index, block in enumerate(model.transformer.h):
-
-    # --- ATENCAO ---
-    residual_attention = hidden_states
-
-    ln_1_out = block.ln_1(hidden_states)
-    qkv = ln_1_out @ block.attn.c_attn.weight + block.attn.c_attn.bias
-    q, k, v = qkv.split(embed_dim, dim=-1)
-
-    q_heads = q.view(1, seq_len, num_heads, head_dim).transpose(1, 2)
-    k_heads = k.view(1, seq_len, num_heads, head_dim).transpose(1, 2)
-    v_heads = v.view(1, seq_len, num_heads, head_dim).transpose(1, 2)
-
-    scores = (q_heads @ k_heads.transpose(-2, -1)) / (head_dim ** 0.5)
-    masked_scores = scores.masked_fill(causal_mask == 0, float("-inf"))
-    attention_probs = F.softmax(masked_scores, dim=-1)
-
-    context_heads = attention_probs @ v_heads
-
-    merged = context_heads.transpose(1, 2).contiguous().view(1, seq_len, embed_dim)
-    attn_out = merged @ block.attn.c_proj.weight + block.attn.c_proj.bias
-    hidden_states = residual_attention + attn_out
-
-    # --- MLP ---
-    residual_mlp = hidden_states
-
-    ln_2_out = block.ln_2(hidden_states)
-    mlp_fc = ln_2_out @ block.mlp.c_fc.weight + block.mlp.c_fc.bias
-    gelu = F.gelu(mlp_fc)
-    mlp_out = gelu @ block.mlp.c_proj.weight + block.mlp.c_proj.bias
-    hidden_states = residual_mlp + mlp_out
-
-# === FINAL ===
-final_norm = model.transformer.ln_f(hidden_states)
-last_token_state = final_norm[:, -1, :]
-logits = last_token_state @ model.lm_head.weight.T
-probabilities = F.softmax(logits, dim=-1)
-top_probs, top_ids = torch.topk(probabilities[0], 10)
-result_text = prompt + tokenizer.decode([top_ids[0]])
-'''
 
 LINE_TOOLTIPS: dict[int, str] = {
-    1: "Importa o PyTorch, framework usado pelo GPT-2.",
-    2: "Importa funcoes de ativacao como softmax e gelu.",
-    5: "Converte o prompt em IDs numericos de tokens.",
-    6: "Decodifica cada ID de volta para o texto do token.",
-    7: "Numero de tokens na sequencia de entrada.",
-    8: "Indices posicionais 0, 1, 2, ... para cada token.",
-    11: "Embedding de tokens: mapeia cada ID para um vetor 768D.",
-    12: "Embedding posicional: mapeia cada posicao para um vetor 768D.",
-    13: "Soma os dois embeddings para formar o estado oculto inicial.",
-    16: "Dimensao do embedding (768 para GPT-2 small).",
-    17: "Numero de cabecas de atencao (12).",
-    18: "Dimensao de cada cabeca (64 = 768 / 12).",
-    19: "Mascara causal: impede tokens de verem tokens futuros.",
-    22: "Loop sobre cada bloco transformer (0 a 11).",
-    25: "Preserva o estado atual para a soma residual.",
-    27: "Normalizacao LayerNorm antes da atencao.",
-    28: "Projecao linear fundida: gera Q, K e V juntos (768 -> 2304).",
-    29: "Divide o tensor fundido em Q (768), K (768) e V (768).",
-    31: "Rearranja Q de (B, S, 768) para (B, 12, S, 64) por cabeca.",
-    32: "Rearranja K de (B, S, 768) para (B, 12, S, 64) por cabeca.",
-    33: "Rearranja V de (B, S, 768) para (B, 12, S, 64) por cabeca.",
-    35: "Calcula scores de atencao: Q @ K.T / sqrt(64) para cada cabeca.",
-    36: "Aplica a mascara causal: -inf para posicoes proibidas.",
-    37: "Softmax: converte scores em probabilidades de atencao.",
-    39: "Atencao aplicada: pondera V pelas probabilidades.",
-    42: "Concatena as 12 cabecas de volta para (B, S, 768).",
-    43: "Projecao linear de saida da atencao (768 -> 768).",
-    44: "Soma residual: entrada + saida da atencao.",
-    47: "Preserva o estado para a segunda soma residual.",
-    49: "LayerNorm antes do MLP.",
-    50: "Expansao do MLP: 768 -> 3072 (camada oculta larga).",
-    51: "Ativacao GELU nao-linear aplicada a expansao.",
-    52: "Projecao do MLP: 3072 -> 768 de volta.",
-    53: "Soma residual: entrada do MLP + saida do MLP.",
-    56: "Ultima LayerNorm apos todos os blocos.",
-    57: "Pega o estado oculto do ultimo token apenas.",
-    58: "Projeta o estado no vocabulario: 768 -> 50257 logits.",
-    59: "Softmax sobre logits: probabilidades para cada token.",
-    60: "Pega os 10 tokens mais provaveis.",
-    61: "Concatena o prompt com o token mais provavel.",
+    3: "Guarda o estado para soma residual (atenção)",
+    4: "LayerNorm antes da atenção (ln_1)",
+    5: "Chama GPT2Attention.forward",
+    17: "Guarda estado para soma residual (MLP)",
+    34: "c_attn = Conv1D(3*embed_dim, embed_dim) fundido",
+    42: "Q @ K.T com fator de escala 1/sqrt(head_dim)",
+    44: "Soma a máscara causal (-inf nas posições proibidas)",
+    45: "Softmax: normaliza para probabilidades de atenção",
+    57: "Expansão MLP: embed_dim -> intermediate_size (4x)",
+    87: "Token embedding via wte (vocab_size -> embed_dim)",
+    91: "Calcula position_ids se não fornecido",
 }
 
 CODE_LINES = CODE_SOURCE.split("\n")
 
-BG_HIGHLIGHT = QColor("#264F78")
-
-STEP_TO_CODE: dict[str, str] = {
-    "input_ids": "input_ids = tokenizer",
-    "position_ids": "position_ids = torch",
-    "wte(input_ids)": "token_embeddings =",
-    "wpe(position_ids)": "position_embeddings =",
-    "Embedding Sum": "hidden_states = token_embeddings",
-    "residual_attention_input": "residual_attention =",
-    "residual_mlp_input": "residual_mlp =",
-    "ln_1": "ln_1_out =",
-    "ln_2": "ln_2_out =",
-    "attn.c_attn": "qkv =",
-    "c_attn": "qkv =",
-    "q split": "q, k, v = qkv.split",
-    "k split": "q, k, v = qkv.split",
-    "v split": "q, k, v = qkv.split",
-    "q_heads": "q_heads =",
-    "k_heads": "k_heads =",
-    "v_heads": "v_heads =",
-    "QK scores": "scores =",
-    "Causal Mask": "masked_scores =",
-    "Attention Softmax": "attention_probs =",
-    "Attn Head": "context_heads =",
-    "Merge Heads": "merged =",
-    "Attention Output Projection": "attn_out =",
-    "Residual Add": "hidden_states = residual",
-    "MLP Expand": "mlp_fc =",
-    "GELU": "gelu =",
-    "MLP Project": "mlp_out =",
-    "Final LayerNorm": "final_norm =",
-    "Last Token State": "last_token_state =",
-    "Vocabulary Projection": "logits =",
-    "Vocabulary Softmax": "probabilities =",
-}
-
-
-def _build_step_map() -> dict[str, int]:
-    mapping: dict[str, int] = {}
-    for key, pattern in STEP_TO_CODE.items():
-        for idx, line in enumerate(CODE_LINES):
-            if pattern in line:
-                mapping[key] = idx
-                break
-    return mapping
-
-
-_STEP_TO_LINE = _build_step_map()
-
-
-def _find_line(step_name: str, step_kind: str) -> int:
-    for key, line in _STEP_TO_LINE.items():
-        if key in step_name or key in step_kind:
-            return line
-    return -1
-
-
-TOOLTIP_CSS = """
-<style>
-  .tooltip-line {
-    position: relative;
-    display: inline;
-  }
-  .tooltip-line:hover::after {
-    content: attr(data-tip);
-    position: absolute;
-    left: 0;
-    bottom: 20px;
-    background: #2D2D2D;
-    color: #F0F0F0;
-    font-size: 12px;
-    font-family: 'Segoe UI', sans-serif;
-    white-space: nowrap;
-    padding: 4px 10px;
-    border-radius: 6px;
-    border: 1px solid #555;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-    z-index: 9999;
-    pointer-events: none;
-  }
-</style>
-"""
-
-
 KEYWORDS = {
     "import", "from", "for", "in", "def", "return", "if", "else",
-    "not", "and", "or", "True", "False", "None", "with", "as",
+    "not", "and", "or", "True", "False", "None", "with", "as", "class",
 }
 BUILTINS = {"enumerate", "range", "len", "int", "float", "print", "zip", "list", "dict"}
 
-_HIGHLIGHT_CACHE: dict[int, str] = {}
+_HIGHLIGHT_CACHE: dict[str, str] = {}
 
 
 def _highlight_line(line: str) -> str:
@@ -233,7 +60,7 @@ def _highlight_line(line: str) -> str:
         if escaped[i] == "#":
             parts.append(f"<span style='color:#6A9955;font-style:italic'>{escaped[i:]}</span>")
             break
-        if escaped[i] == '"' or escaped[i] == "'":
+        if escaped[i] in ('"', "'"):
             quote = escaped[i]
             end = i + 1
             while end < len(escaped) and escaped[end] != quote:
@@ -287,6 +114,64 @@ def _build_rich_html(highlight_line: int = -1) -> str:
             f'</div>'
         )
     return f"<!DOCTYPE HTML><html><body style='background:#0B0B0B; font-family: Consolas, monospace; font-size: 13px; margin: 8px;'>{style}{''.join(parts)}</body></html>"
+
+
+STEP_TO_PATTERN: dict[str, str] = {
+    "Token Embedding": "self.wte(input_ids)",
+    "Position Embedding": "self.wpe(position_ids)",
+    "Embedding Sum": "hidden_states = token_embeds + position_embeds",
+    "Residual Input": "residual = hidden_states",
+    "residual_attention_input": "residual = hidden_states",
+    "residual_mlp_input": "residual = hidden_states",
+    "LayerNorm": "self.ln_1",
+    "ln_1": "self.ln_1(hidden_states)",
+    "ln_2": "self.ln_2(hidden_states)",
+    "Linear QKV fused": "self.c_attn = torch.nn.Linear",
+    "c_attn": "qkv = self.c_attn(hidden_states)",
+    "Q split": "query, key, value = qkv.split",
+    "K split": "query, key, value = qkv.split",
+    "V split": "query, key, value = qkv.split",
+    "Q heads": "query = query.view(",
+    "K heads": "key = key.view(",
+    "V heads": "value = value.view(",
+    "q_heads": "query = query.view(",
+    "k_heads": "key = key.view(",
+    "v_heads": "value = value.view(",
+    "QK scores": "query @ key.transpose",
+    "Causal Mask": "attn_weights = attn_weights + attention_mask",
+    "Attention Softmax": "F.softmax(attn_weights, dim=-1)",
+    "Attn Head": "attn_output = attn_weights @ value",
+    "Merge Heads": "attn_output = attn_output.transpose(1, 2).contiguous()",
+    "Attention Output Projection": "self.c_proj(attn_output)",
+    "Residual Add": "hidden_states = residual + attn_output",
+    "MLP Expand": "self.c_fc = torch.nn.Linear",
+    "GELU": "self.act(hidden_states)",
+    "MLP Project": "self.c_proj(hidden_states)",
+    "Final LayerNorm": "self.ln_f(hidden_states)",
+    "Last Token State": "self.transformer(input_ids)",
+    "Vocabulary Projection": "self.lm_head(hidden_states)",
+    "Vocabulary Softmax": "return logits",
+}
+
+
+def _build_pattern_map() -> dict[str, int]:
+    mapping: dict[str, int] = {}
+    for key, pattern in STEP_TO_PATTERN.items():
+        for idx, line in enumerate(CODE_LINES):
+            if pattern in line:
+                mapping[key] = idx
+                break
+    return mapping
+
+
+_STEP_TO_LINE = _build_pattern_map()
+
+
+def find_line(step_name: str, step_kind: str) -> int:
+    for key, line in _STEP_TO_LINE.items():
+        if key in step_kind or key in step_name:
+            return line
+    return -1
 
 
 class CodeTab(QWidget):
@@ -435,7 +320,7 @@ class CodeTab(QWidget):
         if self.result is None or index < 0 or index >= len(self.result.steps):
             return
         step = self.result.steps[index]
-        code_line = _find_line(step.name, step.kind)
+        code_line = find_line(step.name, step.kind)
         if code_line < 0:
             return
         self._apply_highlight(code_line)

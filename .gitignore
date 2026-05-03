@@ -8,3 +8,5 @@ venv/
 .cache/
 dist/
 build/
+gpt2_weights.pt
+externals/
