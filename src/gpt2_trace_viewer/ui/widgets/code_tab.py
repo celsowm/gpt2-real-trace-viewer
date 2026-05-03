@@ -1,126 +1,41 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QColor, QFont, QPainter, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QPushButton,
     QSlider,
-    QTextBrowser,
+    QSplitter,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from gpt2_trace_viewer.application.trace_result import TraceResult
 from gpt2_trace_viewer.ui.step_reveal import StepRevealController
+from gpt2_trace_viewer.ui.widgets.code_explanation import ExplanationPanel
 from gpt2_trace_viewer.ui.widgets.code_source_strings import CODE_SOURCE
+from gpt2_trace_viewer.ui.widgets.code_syntax import PythonSyntaxHighlighter
 
 
 LINE_TOOLTIPS: dict[int, str] = {
-    3: "Guarda o estado para soma residual (atenção)",
-    4: "LayerNorm antes da atenção (ln_1)",
-    5: "Chama GPT2Attention.forward",
-    17: "Guarda estado para soma residual (MLP)",
-    34: "c_attn = Conv1D(3*embed_dim, embed_dim) fundido",
-    42: "Q @ K.T com fator de escala 1/sqrt(head_dim)",
-    44: "Soma a máscara causal (-inf nas posições proibidas)",
-    45: "Softmax: normaliza para probabilidades de atenção",
-    57: "Expansão MLP: embed_dim -> intermediate_size (4x)",
-    87: "Token embedding via wte (vocab_size -> embed_dim)",
-    91: "Calcula position_ids se não fornecido",
+    1: "Residual guardado (atenção)",
+    2: "LayerNorm antes da atenção (ln_1)",
+    3: "Chama GPT2Attention.forward",
+    15: "Residual guardado (MLP)",
+    64: "c_attn = Linear(embed_dim, embed_dim*3) fundido QKV",
+    71: "Q @ K.T com fator de escala 1/sqrt(head_dim)",
+    73: "Soma a máscara causal (-inf nas posições proibidas)",
+    74: "Softmax: normaliza para probabilidades de atenção",
+    102: "Expansão MLP: embed_dim -> intermediate_size (4x)",
+    154: "Token embedding via wte",
+    156: "Position embedding via wpe",
 }
 
 CODE_LINES = CODE_SOURCE.split("\n")
-
-KEYWORDS = {
-    "import", "from", "for", "in", "def", "return", "if", "else",
-    "not", "and", "or", "True", "False", "None", "with", "as", "class",
-}
-BUILTINS = {"enumerate", "range", "len", "int", "float", "print", "zip", "list", "dict"}
-
-_HIGHLIGHT_CACHE: dict[str, str] = {}
-
-
-def _highlight_line(line: str) -> str:
-    cached = _HIGHLIGHT_CACHE.get(line)
-    if cached is not None:
-        return cached
-    
-    leading_spaces = len(line) - len(line.lstrip())
-    leading = "&nbsp;" * leading_spaces if leading_spaces > 0 else ""
-    content = line.lstrip()
-    
-    escaped = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    parts: list[str] = []
-    i = 0
-    while i < len(escaped):
-        if escaped[i : i + 7] == "&lt;!--":
-            end = escaped.find("--&gt;", i + 7)
-            if end == -1:
-                end = len(escaped)
-            parts.append(f"<span style='color:#6A9955;font-style:italic'>{escaped[i:end + 6]}</span>")
-            i = end + 6
-            continue
-        if escaped[i] == "#":
-            parts.append(f"<span style='color:#6A9955;font-style:italic'>{escaped[i:]}</span>")
-            break
-        if escaped[i] in ('"', "'"):
-            quote = escaped[i]
-            end = i + 1
-            while end < len(escaped) and escaped[end] != quote:
-                if escaped[end] == "\\":
-                    end += 1
-                end += 1
-            end += 1
-            parts.append(f"<span style='color:#CE9178'>{escaped[i:end]}</span>")
-            i = end
-            continue
-        if escaped[i].isalpha() or escaped[i] == "_":
-            j = i
-            while j < len(escaped) and (escaped[j].isalnum() or escaped[j] == "_"):
-                j += 1
-            word = escaped[i:j]
-            if word in KEYWORDS:
-                parts.append(f"<span style='color:#569CD6;font-weight:bold'>{word}</span>")
-            elif word in BUILTINS:
-                parts.append(f"<span style='color:#DCDAA8'>{word}</span>")
-            else:
-                parts.append(word)
-            i = j
-            continue
-        parts.append(escaped[i])
-        i += 1
-    result = leading + "".join(parts)
-    _HIGHLIGHT_CACHE[line] = result
-    return result
-
-
-def _build_rich_html(highlight_line: int = -1) -> str:
-    style = (
-        "<style>"
-        ".code-line { line-height: 1.5; padding: 1px 0; white-space: pre; display: block; }"
-        ".hl { background-color: #264F78; border-left: 4px solid #00FFFF; }"
-        ".hl-num { color: #88FFFF; font-weight: bold; }"
-        ".line-num { color: #666; text-align: right; display: inline-block; min-width: 2.5em; margin-right: 1em; user-select: none; }"
-        ".code-content { display: inline; }"
-        "</style>"
-    )
-    parts: list[str] = []
-    for idx, raw_line in enumerate(CODE_LINES):
-        tip = LINE_TOOLTIPS.get(idx, "")
-        tip_attr = f' title="{tip}"' if tip else ""
-        num_cls = "line-num hl-num" if idx == highlight_line else "line-num"
-        hl_cls = "code-line hl" if idx == highlight_line else "code-line"
-        highlighted = _highlight_line(raw_line)
-        parts.append(
-            f'<div class="{hl_cls}"{tip_attr}>'
-            f'<span class="{num_cls}">{idx + 1}</span>'
-            f'<span class="code-content">{highlighted}</span>'
-            f'</div>'
-        )
-    return f"<!DOCTYPE HTML><html><body style='background:#0B0B0B; font-family: Consolas, monospace; font-size: 13px; margin: 8px;'>{style}{''.join(parts)}</body></html>"
-
 
 STEP_TO_PATTERN: dict[str, str] = {
     "Token Embedding": "self.wte(input_ids)",
@@ -180,14 +95,153 @@ def find_line(step_name: str, step_kind: str) -> int:
     return -1
 
 
+_HIGHLIGHT_COLOR = QColor("#264F78")
+_HIGHLIGHT_BORDER_COLOR = QColor("#00FFFF")
+
+
+class LineNumberArea(QWidget):
+    def __init__(self, editor: CodeEditor) -> None:
+        super().__init__(editor)
+        self._editor = editor
+
+    def paintEvent(self, event) -> None:
+        self._editor._paint_line_numbers(event)
+
+    def sizeHint(self):
+        return QSize(self._editor._line_number_area_width(), 0)
+
+
+class CodeEditor(QPlainTextEdit):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFont(QFont("Consolas", 11))
+        self.setStyleSheet(
+            "QPlainTextEdit { background-color: #0B0B0B; color: #D4D4D4; border: none; }"
+        )
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setReadOnly(True)
+        self.setTabStopDistance(28)
+        self.setFrameStyle(0)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+
+        self._highlighted_row: int = -1
+        self._tooltips: dict[int, str] = {}
+
+        self._line_number_area = LineNumberArea(self)
+        self.blockCountChanged.connect(self._update_line_number_area_width)
+        self.updateRequest.connect(self._update_line_number_area)
+        self.cursorPositionChanged.connect(self._highlight_current_line)
+        self._highlight_current_line()
+        self._update_line_number_area_width()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        width = self._line_number_area_width()
+        self._line_number_area.setGeometry(cr.left(), cr.top(), width, cr.height())
+
+    def set_tooltips(self, tips: dict[int, str]) -> None:
+        self._tooltips = tips
+
+    def highlight_row(self, row: int) -> None:
+        self._highlighted_row = row
+        if row >= 0:
+            cursor = QTextCursor(self.document().findBlockByNumber(row))
+            self.setTextCursor(cursor)
+            self._apply_extra_selection(row)
+            self.centerCursor()
+        else:
+            self._highlight_current_line()
+
+    def _apply_extra_selection(self, row: int) -> None:
+        block = self.document().findBlockByNumber(row)
+        if not block.isValid():
+            return
+        sel = QTextEdit.ExtraSelection()
+        sel.format.setBackground(_HIGHLIGHT_COLOR)
+        sel.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
+        sel.cursor = QTextCursor(block)
+        sel.cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+        sel.cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        self.setExtraSelections([sel])
+
+    def _paint_line_numbers(self, event) -> None:
+        painter = QPainter(self._line_number_area)
+        painter.fillRect(event.rect(), QColor("#1E1E1E"))
+        painter.setFont(self.font())
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + round(self.blockBoundingRect(block).height())
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                is_hl = block_number == self._highlighted_row
+                painter.setPen(QColor("#88FFFF" if is_hl else "#666666"))
+                if is_hl:
+                    painter.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+                else:
+                    painter.setFont(QFont("Consolas", 11))
+                painter.drawText(
+                    0, top,
+                    self._line_number_area.width() - 8, self.fontMetrics().height(),
+                    Qt.AlignmentFlag.AlignRight,
+                    str(block_number + 1),
+                )
+
+            block = block.next()
+            top = bottom
+            bottom = top + round(self.blockBoundingRect(block).height())
+            block_number += 1
+
+    def _line_number_area_width(self):
+        digits = len(str(max(1, self.blockCount())))
+        return 12 + self.fontMetrics().horizontalAdvance("9") * digits
+
+    def _update_line_number_area_width(self) -> None:
+        width = self._line_number_area_width()
+        self.setViewportMargins(width, 0, 0, 0)
+
+    def _update_line_number_area(self, rect, dy) -> None:
+        if dy:
+            self._line_number_area.scroll(0, dy)
+        else:
+            self._line_number_area.update(0, rect.y(), self._line_number_area.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self._update_line_number_area_width()
+
+    def _highlight_current_line(self) -> None:
+        if self._highlighted_row >= 0:
+            return
+        sel = QTextEdit.ExtraSelection()
+        sel.format.setBackground(QColor("#2A2D2E"))
+        sel.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
+        sel.cursor = self.textCursor()
+        sel.cursor.clearSelection()
+        self.setExtraSelections([sel])
+
+    def mouseMoveEvent(self, event) -> None:
+        super().mouseMoveEvent(event)
+        cursor = self.cursorForPosition(event.pos())
+        block = cursor.block()
+        line = block.blockNumber()
+        tip = self._tooltips.get(line, "")
+        if tip:
+            self.setToolTip(tip)
+        else:
+            self.setToolTip("")
+
+
 class CodeTab(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.result: TraceResult | None = None
         self._controller: StepRevealController | None = None
-        self._highlighted_row: int = -1
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         controls = QHBoxLayout()
         self.play_btn = QPushButton("Reproduzir")
@@ -219,31 +273,36 @@ class CodeTab(QWidget):
         controls.addStretch()
         layout.addLayout(controls)
 
-        self.browser = QTextBrowser()
-        self.browser.setFont(QFont("Consolas", 11))
-        self.browser.setStyleSheet(
-            "QTextBrowser { background-color: #0B0B0B; color: #D4D4D4; border: none; }"
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        self.editor = CodeEditor()
+        self.editor.setPlainText(CODE_SOURCE)
+        self.editor.set_tooltips(LINE_TOOLTIPS)
+        self._highlighter = PythonSyntaxHighlighter(self.editor.document())
+        left_layout.addWidget(self.editor)
+        splitter.addWidget(left_panel)
+
+        self.explanation = ExplanationPanel()
+        splitter.addWidget(self.explanation)
+
+        splitter.setSizes([800, 200])
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+        splitter.setHandleWidth(3)
+        splitter.setStyleSheet(
+            "QSplitter::handle { background-color: #333333; }"
         )
-        self.browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self.browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.browser.setOpenExternalLinks(False)
-        self.browser.setOpenLinks(False)
-        layout.addWidget(self.browser)
 
-        self._render_all()
+        layout.addWidget(splitter, 1)
 
-    def _render_all(self) -> None:
-        self.browser.setHtml(_build_rich_html())
+        self.original_font = QFont("Consolas", 11)
+        self.original_font.setPointSize(11)
 
     def _apply_highlight(self, row: int) -> None:
-        self.browser.setHtml(_build_rich_html(highlight_line=row))
-        if row >= 0:
-            cursor = self.browser.textCursor()
-            block = self.browser.document().findBlockByLineNumber(row)
-            if block.isValid():
-                cursor.setPosition(block.position())
-                self.browser.setTextCursor(cursor)
-                self.browser.ensureCursorVisible()
+        self.editor.highlight_row(row)
 
     def _style_button(self, btn: QPushButton) -> None:
         btn.setStyleSheet(
@@ -258,11 +317,11 @@ class CodeTab(QWidget):
             self._controller.stop()
         self._controller = None
         self.result = None
-        self._highlighted_row = -1
         self.play_btn.setEnabled(False)
         self.skip_end_btn.setEnabled(False)
         self.step_label.setText("")
-        self._render_all()
+        self.editor.highlight_row(-1)
+        self.explanation.clear()
 
     def set_result(self, result: TraceResult) -> None:
         self.result = result
@@ -331,3 +390,4 @@ class CodeTab(QWidget):
             return
         self._apply_highlight(code_line)
         self.step_label.setText(f"{index + 1} / {len(self.result.steps)} passos")
+        self.explanation.show_step(step, code_line)

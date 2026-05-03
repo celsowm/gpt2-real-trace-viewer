@@ -70,7 +70,11 @@ class RealForwardTraceWorker(QThread):
                 name="input_ids",
                 kind="Token IDs",
                 tensor=input_ids,
-                description="IDs produzidos pelo tokenizador.",
+                description=(
+                    "Índices inteiros representando cada token do prompt no vocabulário GPT-2 "
+                    "(vocab_size=50257). Ex: 'We' → 263, 'the' → 262. "
+                    "Shape: [1, seq_len] — batch=1, seq_len=número de tokens."
+                ),
             )
 
             position_ids = torch.arange(0, seq_len, dtype=torch.long).unsqueeze(0)
@@ -79,7 +83,11 @@ class RealForwardTraceWorker(QThread):
                 name="position_ids",
                 kind="Position IDs",
                 tensor=position_ids,
-                description="Índices posicionais usados pelo GPT-2.",
+                description=(
+                    "Índices posicionais [0, 1, 2, ..., seq_len-1]. "
+                    "GPT-2 não tem recorrência ou convolução — precisa da posição de cada token "
+                    "para saber a ordem da sequência. Shape: [1, seq_len]."
+                ),
             )
 
             token_embeddings = model.transformer.wte(input_ids)
@@ -89,13 +97,23 @@ class RealForwardTraceWorker(QThread):
                 name="transformer.wte(input_ids)",
                 kind="Token Embedding",
                 tensor=token_embeddings,
-                description="Embedding aprendido dos tokens.",
+                description=(
+                    "Consulta a tabela de embedding de tokens (wte = word token embedding). "
+                    "Cada token ID vira um vetor de 768 dimensões. "
+                    "É uma matriz treinável de shape [50257, 768] — uma linha por palavra no vocabulário. "
+                    "Shape saída: [1, seq_len, 768]."
+                ),
             )
             add_step(
                 name="transformer.wpe(position_ids)",
                 kind="Position Embedding",
                 tensor=position_embeddings,
-                description="Embedding aprendido das posições.",
+                description=(
+                    "Consulta a tabela de embedding posicional (wpe = word position embedding). "
+                    "Cada posição [0..1023] tem um vetor aprendido de 768 dimensões. "
+                    "Isso permite que o modelo saiba onde cada token está na sequência. "
+                    "Shape: [1, seq_len, 768], igual ao token embedding."
+                ),
             )
 
             hidden_states = token_embeddings + position_embeddings
@@ -103,7 +121,12 @@ class RealForwardTraceWorker(QThread):
                 name="hidden_states = token_embeddings + position_embeddings",
                 kind="Embedding Sum",
                 tensor=hidden_states,
-                description="Soma do embedding de token com o embedding posicional.",
+                description=(
+                    "Soma elemento-a-elemento do embedding do token com o embedding posicional. "
+                    "Resultado: um vetor de 768 dimensões para cada posição que codifica "
+                    "tanto o significado do token quanto sua posição na frase. "
+                    "Shape: [1, seq_len, 768]."
+                ),
             )
 
             embed_dim = model.config.n_embd
@@ -122,7 +145,12 @@ class RealForwardTraceWorker(QThread):
                     kind="Residual Input",
                     tensor=residual_attention,
                     block=block_index,
-                    description="Entrada preservada para soma residual depois da atenção.",
+                    description=(
+                        "Copia o hidden_states ANTES da atenção. Essa cópia será somada de volta "
+                        "após a atenção (soma residual / skip connection). "
+                        "Essencial para treinar redes profundas — evita o desvanecimento do gradiente. "
+                        f"Bloco {block_index + 1}/12. Shape: [1, seq_len, 768]."
+                    ),
                 )
 
                 ln_1_out = block.ln_1(hidden_states)
@@ -131,7 +159,13 @@ class RealForwardTraceWorker(QThread):
                     kind="LayerNorm",
                     tensor=ln_1_out,
                     block=block_index,
-                    description="Normalização antes da atenção.",
+                    description=(
+                        "Layer Normalization (ln_1) antes da atenção. "
+                        "Normaliza as ativações para ter média ~0 e variância ~1, depois "
+                        "aplica escala e bias aprendidos (γ e β). "
+                        "Ajuda a estabilizar o treinamento e reduz a sensibilidade à escala dos inputs. "
+                        f"Bloco {block_index + 1}/12. Shape: [1, seq_len, 768]."
+                    ),
                 )
 
                 qkv = (ln_1_out @ block.attn.c_attn.weight) + block.attn.c_attn.bias
@@ -140,7 +174,12 @@ class RealForwardTraceWorker(QThread):
                     kind="Linear QKV fused",
                     tensor=qkv,
                     block=block_index,
-                    description="Projeção fundida que gera Q, K e V juntos.",
+                    description=(
+                        "Projeção linear fundida que gera Query, Key e Value simultaneamente. "
+                        "c_attn é uma matriz [768, 2304] que mapeia 768 → 2304 dimensões "
+                        "(3 × 768 para Q, K, V concatenados). "
+                        f"Bloco {block_index + 1}/12. Shape: [1, seq_len, 2304]."
+                    ),
                 )
 
                 q, k, v = qkv.split(embed_dim, dim=-1)
@@ -149,21 +188,36 @@ class RealForwardTraceWorker(QThread):
                     kind="Q split",
                     tensor=q,
                     block=block_index,
-                    description="Parte Q extraída da projeção fundida.",
+                    description=(
+                        "Parte Query — primeiro terço da projeção fundida. Query pergunta: "
+                        "'O quanto cada token deve prestar atenção nos outros?'. "
+                        f"Shape: [1, seq_len, 768] — Bloco {block_index + 1}/12."
+                    ),
                 )
                 add_step(
                     name=f"block_{block_index}.k",
                     kind="K split",
                     tensor=k,
                     block=block_index,
-                    description="Parte K extraída da projeção fundida.",
+                    description=(
+                        "Parte Key — segundo terço da projeção fundida. Key responde: "
+                        "'O quanto cada token merece receber atenção?'. "
+                        "O produto Q @ K.T produz os scores de atenção. "
+                        f"Shape: [1, seq_len, 768] — Bloco {block_index + 1}/12."
+                    ),
                 )
                 add_step(
                     name=f"block_{block_index}.v",
                     kind="V split",
                     tensor=v,
                     block=block_index,
-                    description="Parte V extraída da projeção fundida.",
+                    description=(
+                        "Parte Value — terceiro terço da projeção fundida. Value carrega "
+                        "a informação real que será agregada. "
+                        "A saída da atenção é a média ponderada dos Values, onde os pesos "
+                        "vêm do softmax(Q @ K.T). "
+                        f"Shape: [1, seq_len, 768] — Bloco {block_index + 1}/12."
+                    ),
                 )
 
                 q_heads = q.view(1, seq_len, num_heads, head_dim).transpose(1, 2)
@@ -175,21 +229,37 @@ class RealForwardTraceWorker(QThread):
                     kind="Q heads",
                     tensor=q_heads,
                     block=block_index,
-                    description="Q separado em múltiplas cabeças.",
+                    description=(
+                        "Query remodelada para múltiplas cabeças de atenção. "
+                        "De [1, seq_len, 768] → [1, 12, seq_len, 64]. "
+                        "GPT-2 usa 12 cabeças paralelas, cada uma opera em 64 dimensões. "
+                        "Cada cabeça pode aprender um padrão de atenção diferente. "
+                        f"Bloco {block_index + 1}/12."
+                    ),
                 )
                 add_step(
                     name=f"block_{block_index}.k_heads",
                     kind="K heads",
                     tensor=k_heads,
                     block=block_index,
-                    description="K separado em múltiplas cabeças.",
+                    description=(
+                        "Key remodelada para 12 cabeças. "
+                        "Shape: [1, 12, seq_len, 64]. "
+                        f"Bloco {block_index + 1}/12. "
+                        "Junto com Q, cada cabeça calcula atenção independentemente."
+                    ),
                 )
                 add_step(
                     name=f"block_{block_index}.v_heads",
                     kind="V heads",
                     tensor=v_heads,
                     block=block_index,
-                    description="V separado em múltiplas cabeças.",
+                    description=(
+                        "Value remodelada para 12 cabeças. "
+                        "Shape: [1, 12, seq_len, 64]. "
+                        f"Bloco {block_index + 1}/12. "
+                        "Cada cabeça produz sua própria saída ponderada."
+                    ),
                 )
 
                 scores = (q_heads @ k_heads.transpose(-2, -1)) / math.sqrt(head_dim)
@@ -198,7 +268,13 @@ class RealForwardTraceWorker(QThread):
                     kind="QK scores",
                     tensor=scores,
                     block=block_index,
-                    description="Scores brutos de atenção antes da máscara causal.",
+                    description=(
+                        "Scores de atenção brutos = Q @ K.T / √d_k. "
+                        "Produto escalar entre cada query e cada key — mede compatibilidade. "
+                        "Divide por √64 = 8 para evitar que scores cresçam muito com a dimensão. "
+                        "Shape: [1, 12, seq_len, seq_len]. "
+                        f"Bloco {block_index + 1}/12. Valores altos = mais atenção."
+                    ),
                 )
 
                 masked_scores = scores.masked_fill(causal_mask == 0, float("-inf"))
@@ -211,8 +287,11 @@ class RealForwardTraceWorker(QThread):
                     tensor=display_masked_scores,
                     block=block_index,
                     description=(
-                        "Scores após a máscara causal. Valores -inf são mostrados como 0 "
-                        "apenas para estatísticas e visualização."
+                        "Máscara causal aplicada: tokens futuros viram -inf (depois mostrados como 0 "
+                        "para visualização). "
+                        "Isso garante que o token na posição i só pode ver tokens ≤ i. "
+                        "Sem isso, o modelo 'trapacearia' vendo tokens futuros. "
+                        f"Bloco {block_index + 1}/12. Forma: triângulo inferior."
                     ),
                 )
 
@@ -222,7 +301,13 @@ class RealForwardTraceWorker(QThread):
                     kind="Attention Softmax",
                     tensor=attention_probs,
                     block=block_index,
-                    description="Distribuição real de atenção após softmax.",
+                    description=(
+                        "Softmax sobre a última dimensão transforma scores em probabilidades "
+                        "(valores entre 0 e 1, somam 1 por linha). "
+                        "Tokens com -inf viram 0 (não recebem atenção). "
+                        f"Bloco {block_index + 1}/12. "
+                        "Cada linha i diz: 'quanto o token i deve prestar atenção em cada token j ≤ i'."
+                    ),
                 )
 
                 for head_index in range(num_heads):
@@ -256,7 +341,11 @@ class RealForwardTraceWorker(QThread):
                     kind="Merge Heads",
                     tensor=merged_context,
                     block=block_index,
-                    description="Concatenação das cabeças de atenção.",
+                    description=(
+                        "Concatena as 12 cabeças de volta: [1, 12, seq_len, 64] → [1, seq_len, 768]. "
+                        "Cada cabeça contribui com 64 dimensões; juntas formam o vetor completo de 768. "
+                        f"Bloco {block_index + 1}/12."
+                    ),
                 )
 
                 attention_projection = (
@@ -267,7 +356,12 @@ class RealForwardTraceWorker(QThread):
                     kind="Attention Output Projection",
                     tensor=attention_projection,
                     block=block_index,
-                    description="Projeção final da atenção.",
+                    description=(
+                        "Projeção de saída da atenção (c_proj). "
+                        "Uma transformação linear [768, 768] que mistura as informações "
+                        "das 12 cabeças antes da soma residual. "
+                        f"Bloco {block_index + 1}/12. Shape: [1, seq_len, 768]."
+                    ),
                 )
 
                 hidden_states = residual_attention + attention_projection
@@ -276,7 +370,13 @@ class RealForwardTraceWorker(QThread):
                     kind="Residual Add",
                     tensor=hidden_states,
                     block=block_index,
-                    description="Soma residual: entrada do bloco + saída da atenção.",
+                    description=(
+                        "Soma residual: hidden_states = residual_attention + attn_output. "
+                        "A entrada original do sub-bloco de atenção é somada à saída processada. "
+                        "Isso permite que o gradiente flua diretamente durante o treinamento "
+                        "(sem passar pelas camadas internas). "
+                        f"Bloco {block_index + 1}/12."
+                    ),
                 )
 
                 residual_mlp = hidden_states
@@ -285,7 +385,13 @@ class RealForwardTraceWorker(QThread):
                     kind="Residual Input",
                     tensor=residual_mlp,
                     block=block_index,
-                    description="Entrada preservada para soma residual depois do MLP.",
+                    description=(
+                        "Copia o hidden_states ANTES do MLP (feed-forward). "
+                        "Assim como na atenção, será somado de volta após o MLP. "
+                        f"Bloco {block_index + 1}/12. "
+                        "Cada bloco do transformer tem dois sub-blocos: atenção + MLP, "
+                        "cada um com sua própria soma residual."
+                    ),
                 )
 
                 ln_2_out = block.ln_2(hidden_states)
@@ -294,7 +400,12 @@ class RealForwardTraceWorker(QThread):
                     kind="LayerNorm",
                     tensor=ln_2_out,
                     block=block_index,
-                    description="Normalização antes do MLP.",
+                    description=(
+                        "Layer Normalization (ln_2) antes do MLP. "
+                        "Mesma operação da ln_1: normaliza para média ~0 e variância ~1, "
+                        "depois aplica γ e β aprendidos. "
+                        f"Bloco {block_index + 1}/12. Shape: [1, seq_len, 768]."
+                    ),
                 )
 
                 mlp_fc = (ln_2_out @ block.mlp.c_fc.weight) + block.mlp.c_fc.bias
@@ -303,7 +414,13 @@ class RealForwardTraceWorker(QThread):
                     kind="MLP Expand",
                     tensor=mlp_fc,
                     block=block_index,
-                    description="Expansão do MLP: 768 → 3072.",
+                    description=(
+                        "Primeira camada do MLP (c_fc = fully connected). "
+                        "Expande de 768 → 3072 dimensões (4×). "
+                        "Essa expansão permite que o modelo aprenda interações mais complexas "
+                        "entre as dimensões. "
+                        f"Bloco {block_index + 1}/12. Shape: [1, seq_len, 3072]."
+                    ),
                 )
 
                 gelu = F.gelu(mlp_fc)
@@ -312,7 +429,13 @@ class RealForwardTraceWorker(QThread):
                     kind="GELU",
                     tensor=gelu,
                     block=block_index,
-                    description="Ativação GELU real aplicada ao MLP.",
+                    description=(
+                        "Ativação não-linear GELU (Gaussian Error Linear Unit). "
+                        "Similar a ReLU, mas com uma transição suave perto de zero. "
+                        "GELU(x) ≈ x · Φ(x) onde Φ é a CDF da normal padrão. "
+                        "Introduz não-linearidade — sem ela, o MLP seria só duas lineares. "
+                        f"Bloco {block_index + 1}/12."
+                    ),
                 )
 
                 mlp_projection = (gelu @ block.mlp.c_proj.weight) + block.mlp.c_proj.bias
@@ -321,7 +444,13 @@ class RealForwardTraceWorker(QThread):
                     kind="MLP Project",
                     tensor=mlp_projection,
                     block=block_index,
-                    description="Projeção do MLP: 3072 → 768.",
+                    description=(
+                        "Segunda camada do MLP (c_proj). "
+                        "Projeta de volta de 3072 → 768 dimensões. "
+                        "Essa é a 'garrafinha' (bottleneck) — expande, aplica não-linearidade, "
+                        "depois comprime de volta. "
+                        f"Bloco {block_index + 1}/12. Shape: [1, seq_len, 768]."
+                    ),
                 )
 
                 hidden_states = residual_mlp + mlp_projection
@@ -330,7 +459,12 @@ class RealForwardTraceWorker(QThread):
                     kind="Residual Add",
                     tensor=hidden_states,
                     block=block_index,
-                    description="Soma residual: entrada do MLP + saída do MLP.",
+                    description=(
+                        "Soma residual: hidden_states = residual_mlp + mlp_output. "
+                        "Segunda soma residual do bloco (depois do MLP). "
+                        "A saída final deste bloco vira a entrada do próximo bloco. "
+                        f"Bloco {block_index + 1}/12 completo."
+                    ),
                 )
 
             final_norm = model.transformer.ln_f(hidden_states)
@@ -338,7 +472,11 @@ class RealForwardTraceWorker(QThread):
                 name="transformer.ln_f",
                 kind="Final LayerNorm",
                 tensor=final_norm,
-                description="Normalização final do transformer.",
+                description=(
+                    "Layer Normalization final após todos os 12 blocos. "
+                    "Última normalização antes da projeção para o vocabulário. "
+                    "Shape: [1, seq_len, 768]."
+                ),
             )
 
             last_token_state = final_norm[:, -1, :]
@@ -346,7 +484,11 @@ class RealForwardTraceWorker(QThread):
                 name="last_token_state",
                 kind="Last Token State",
                 tensor=last_token_state,
-                description="Estado oculto do último token usado para prever o próximo token.",
+                description=(
+                    "Pega APENAS o estado do ÚLTIMO token (posição -1). "
+                    "GPT-2 é um modelo generativo autorregressivo — para prever o PRÓXIMO token, "
+                    "só usamos a saída da última posição. Shape: [1, 768]."
+                ),
             )
 
             logits = last_token_state @ model.lm_head.weight.T
@@ -354,7 +496,12 @@ class RealForwardTraceWorker(QThread):
                 name="lm_head",
                 kind="Vocabulary Projection",
                 tensor=logits,
-                description="Projeção para o vocabulário.",
+                description=(
+                    "Projeção linear do estado [1, 768] para o vocabulário [1, 50257]. "
+                    "lm_head.weight é uma matriz [50257, 768] — uma linha por palavra no vocabulário. "
+                    "O produto escalar com cada linha dá um 'score' (logit) para cada palavra. "
+                    "Quanto maior o logit, mais provável a palavra ser a próxima."
+                ),
             )
 
             probabilities = F.softmax(logits, dim=-1)
@@ -362,7 +509,12 @@ class RealForwardTraceWorker(QThread):
                 name="softmax_vocab",
                 kind="Vocabulary Softmax",
                 tensor=probabilities,
-                description="Probabilidades reais para o próximo token.",
+                description=(
+                    "Softmax sobre os 50257 logits transforma scores em probabilidades "
+                    "(valores entre 0 e 1, somam 1). "
+                    "O token com maior probabilidade é a previsão final do modelo. "
+                    "Exibe também o top-10 no painel Output."
+                ),
             )
 
             top_probs, top_ids = torch.topk(probabilities[0], 10)

@@ -37,6 +37,8 @@ class StepRevealController(QObject):
 
     def set_delay(self, ms: int) -> None:
         self._delay = max(50, ms)
+        if self._running:
+            self._timer.setInterval(self._delay)
 
     def start(self) -> None:
         if self._total == 0:

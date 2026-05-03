@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 from gpt2_trace_viewer.application.forward_tracer import RealForwardTraceWorker
 from gpt2_trace_viewer.application.trace_result import TraceResult
 from gpt2_trace_viewer.infra.model_loader import ModelLoaderThread
+from gpt2_trace_viewer.ui.splash import SplashScreen
 from gpt2_trace_viewer.ui.widgets.attention_tab import AttentionTab
 from gpt2_trace_viewer.ui.widgets.code_tab import CodeTab
 from gpt2_trace_viewer.ui.widgets.graph_viewer import RealNeuralGraphViewer
@@ -26,12 +27,13 @@ from gpt2_trace_viewer.ui.widgets.trace_tab import TraceTab
 class MainWindow(QMainWindow):
     """Application shell. It wires UI widgets to loader/tracer workers."""
 
-    def __init__(self) -> None:
+    def __init__(self, splash: SplashScreen | None = None) -> None:
         super().__init__()
         self.model = None
         self.tokenizer = None
         self.loader_thread: ModelLoaderThread | None = None
         self.trace_worker: RealForwardTraceWorker | None = None
+        self._splash = splash
 
         self.setWindowTitle("GPT-2 Real Forward Trace Viewer")
         self.resize(1350, 900)
@@ -129,6 +131,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.output_tab, "Output")
 
     def _start_model_loading(self) -> None:
+        if self._splash:
+            self._splash.set_message("Carregando modelo GPT-2…")
         self.loader_thread = ModelLoaderThread("gpt2")
         self.loader_thread.loaded.connect(self._on_model_loaded)
         self.loader_thread.failed.connect(self._on_model_failed)
@@ -145,6 +149,9 @@ class MainWindow(QMainWindow):
 
         self.prompt_input.setEnabled(True)
         self.run_button.setEnabled(True)
+
+        if self._splash:
+            self._splash.close()
 
     def _on_model_failed(self, message: str) -> None:
         self.status_label.setText(f"Erro ao carregar GPT-2: {message}")
